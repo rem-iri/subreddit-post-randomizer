@@ -1,0 +1,401 @@
+<!-- 
+    -- Current Pushshift rate limit is 120/min regardless of complexity, this app prevents sending 60+/min
+    -- "Post" is referring to a subreddit's submission
+ -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subreddit Post Randomizer</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/muicss/0.10.3/css/mui.min.css" integrity="sha512-rzzqoedGiSVG9cdcCh9C0iMTMxV55u/GRqXhPdrPfDFCsFSVsV5Kk82CRe1pxYXv6gn1lXGdmKR/eGpBe91H+g==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+    <style>
+        * {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #snackbar {
+            visibility: hidden;
+            width: 100vw;
+            height: 300px;
+            position: fixed;
+            top: 0;
+            left: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #snackbar.show {
+            visibility: visible; /* Show the snackbar */
+            transition: ease-in-out;
+        }
+        #snackbarDialog {
+            min-width: 250px;
+            position: inherit;
+            background-color: #333;
+            color: #fff;
+            text-align: center;
+            border-radius: 5px;
+            padding: 16px;
+            z-index: 1;
+        }
+        .navigation {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100vw;
+            height: auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            
+        }
+        .navigation > * {
+            font-size: 1.5rem;
+            height: auto;
+            width: 100%; 
+        }
+        .controls, .inputbox {
+            display: flex;
+            max-width: 800px;
+        }
+        .controls > *, .inputbox > *{
+            margin: .5rem;
+        }
+        .controls button:nth-child(2) {
+            flex: 5;
+        }
+        .controls button:nth-child(1), .controls button:nth-child(3) {
+            flex: 1;
+        }
+
+        #spinner {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            display: block;
+            margin:15px auto;
+            position: relative;
+            background: #FFF;
+            box-shadow: -24px 0 #FFF, 24px 0 #FFF;
+            box-sizing: border-box;
+            animation: shadowPulse 1s linear infinite;
+        }
+
+        @keyframes shadowPulse {
+            33% {
+                background: #FFF;
+                box-shadow: -24px 0 #FF3D00, 24px 0 #FFF;
+            }
+            66% {
+                background: #FF3D00;
+                box-shadow: -24px 0 #FFF, 24px 0 #FFF;
+            }
+            100% {
+                background: #FFF;
+                box-shadow: -24px 0 #FFF, 24px 0 #FF3D00;
+            }
+        }
+        #logo {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #logo h2 {
+            width: 100%;
+            background-image: linear-gradient(to left, #ffbc00, #ff3b00);
+            color: transparent;
+            -webkit-background-clip: text;
+            background-clip: text;
+            cursor: pointer;
+            white-space: nowrap;
+            font-weight: bold;
+            text-align: center;
+        }
+        #logo a {
+            text-decoration: none;
+        }
+        #reddit-embed {
+            height: 527px;
+            width: 100vw;
+            border: 1px solid rgb(194, 194, 194);
+            border-radius: 1rem; 
+            margin: 1rem
+        }
+        .post {
+            margin-top: 2rem 0px;
+            height: auto; 
+            margin-bottom: 15vh; 
+            display: flex; 
+            flex-direction: column; 
+            justify-content: flex-start;
+            align-items: center;
+            overflow-x: hidden;
+        }
+
+        /* -- MEDIA QUERIES*/
+        @media (min-width: 576px) {}
+        @media (min-width: 768px) {}
+        @media (min-width: 992px) {}
+        @media (min-width: 1200px) {
+            #reddit-embed {
+                max-width: 800px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="logo">
+        <a href="#">
+            <h2>Subreddit Post Randomizer</h2>
+        </a>
+    </div>
+    <div class="post">
+        <iframe id="reddit-embed" src="" sandbox="allow-scripts allow-same-origin allow-popups" style="border: none;" scrolling="no"></iframe>
+    </div>
+
+    <div class="navigation">
+        <span id="spinner"></span>
+        <div class="mui-textfield mui-textfield--float-label inputbox">
+            <input id="inputSubreddit" type="text">
+            <label>Subreddit</label>
+        </div>
+
+        <div class="controls">
+            <button class="mui-btn mui-btn--danger" id="buttonPrevious" onclick="previousPost()">&lt;</button>
+            <button class="mui-btn mui-btn--raised mui-btn--danger" id="buttonRandom" onclick="randomPost()">Random 🎲</button>
+            <button class="mui-btn mui-btn--danger" id="buttonNext" onclick="nextPost()">&gt;</button>
+        </div>
+    </div>
+
+    <div class="center">
+        <div id="snackbar">
+            <div id="snackbarDialog"></div>
+        </div>
+    </div>
+    
+    <script>
+        let subreddit = null;
+        let posts = [];
+        let current = null;
+        let total = 0;
+
+        let SECONDS_OF_HOUR = 60 * 60;
+
+        let FETCH_LIMIT = 60;
+        let FETCH_WINDOW = 60;
+        let fetchAllowed = true;
+        let fetchesSent = 0;
+
+        async function fetchSubredditDate() {
+            let response, json;
+
+            try {
+                response = await fetch(`https://api.reddit.com/r/${subreddit}/about.json`);
+                handleError(response);
+                
+                json = await response.json();
+                if(!json.data.created_utc) throw new Error("No timestamp found");
+
+                return json.data.created_utc;
+            } catch(error) {
+                if(response) {
+                    json = await response.json();
+
+                    if(json?.reason ?? false) {
+                        showSnackbar(`Cannot access subreddit. Reason: ${json.reason}`);
+                        throw new Error(`JSON reason: ${json.reason}`);
+                    }
+
+                    throw error;
+                }
+                
+                showSnackbar(`Error fetching subreddit.`)
+                throw error;
+            }   
+        }       
+
+        function showSnackbar(message) {
+            let snackbar = document.getElementById("snackbar");
+            let snackbarDialog = document.getElementById("snackbarDialog");
+            
+            snackbarDialog.innerText = message;
+            snackbar.classList.add("show");
+            setTimeout(() => { snackbar.classList.remove("show"); }, 3000);
+        }
+
+        async function randomPost(text) {
+            if(fetchesSent > FETCH_LIMIT) {
+                alert("Requests per minute exceeded, slow down.")
+                return;
+            }
+            debounceFetch();
+            subreddit = text ?? document.getElementById("inputSubreddit").value.trim();
+            if(!subreddit) return;
+
+            let hour = await randomHour();
+            fetchPost(hour);
+        }
+
+        async function randomHour() {
+            let subredditDate = await fetchSubredditDate();
+            let dateToday = new Date();
+            let todayUtc = Date.UTC(dateToday.getUTCFullYear(), dateToday.getUTCMonth(), dateToday.getUTCDate(), dateToday.getUTCHours()) / 1000;
+            let hoursSince = (todayUtc - subredditDate) / SECONDS_OF_HOUR;
+            let randomHour = Math.ceil(Math.random() * hoursSince);
+            // -- Ceiling will ensure no post up to the latest hour will be omitted
+            let hourUtc = Math.ceil(subredditDate + (randomHour * SECONDS_OF_HOUR));
+
+            return hourUtc;
+        }
+
+        function debounceFetch() {
+            fetchesSent++;
+            setTimeout(() => {fetchesSent--}, Math.round(FETCH_WINDOW / FETCH_LIMIT) * 1000);
+        }
+
+        // -- Pushshift API
+        async function fetchPost(hourUtc, size = 500) {
+            let response, json;
+
+            try {
+                showSpinner(true);
+                response = await fetch(`https://api.pushshift.io/reddit/submission/search?html_decode=true&after=${hourUtc}&before=${hourUtc + SECONDS_OF_HOUR}&subreddit=${subreddit}&size=${500}`);
+                handleError(response);
+                json = await response.json();
+            } catch(error) {
+                showSpinner(false);
+                if(response) {
+                    json = await response.json();
+                    if(json?.reason ?? false) {
+                        showSnackbar(`Error fetching posts. Reason: ${json.reason}`);
+                        throw new Error(`JSON reason: ${json.reason}`);
+                    }
+                }
+                
+                showSnackbar("Error fetching posts.")
+                throw error;
+            }
+
+            if(json.data.length == 0) {
+                showSnackbar(`No posts found from ${new Date(hourUtc * 1000).toLocaleString()}. Try randomizing again.`);
+                throw new Error("Empty data array.");
+            }
+
+            let badChunk = [];
+            let pool = [...Array(json.data.length).keys()].filter(e => !badChunk.includes(e));
+            for(let i = 0; i < 1; ) {
+                if(pool.length == 0) break;
+
+                let random = Math.floor( Math.random() * pool.length);
+                let url = json.data[pool[random]].permalink;
+                let fullUrl = json.data[pool[random]].full_link;
+
+                while(fullUrl[fullUrl.length - 1] == "/") {
+                    fullUrl = fullUrl.slice(0, -1);
+                }
+                let isDeleted = await isPostDeleted(fullUrl);
+                console.log(`Randomized ${pool[random]+1}/${pool.length} post from ${new Date(hourUtc * 1000).toLocaleString()}. URL: ${url}`);
+                if(isDeleted || !url) {
+                    badChunk.push(pool[random]);
+                    
+                    i = 0;
+                    pool = [...Array(json.data.length).keys()].filter(e => !badChunk.includes(e));
+                    continue;
+                }
+
+                posts.push(`https://www.redditmedia.com${url}?ref_source=embed&amp;ref=share&amp;embed=true`);
+
+                current = posts.length - 1;
+                updatePostPage(current);
+                showSpinner(false);
+                i++;
+            }
+        }
+
+        async function isPostDeleted(url) {
+            let response = await fetch(`${url}.json`);
+            let json = await response.json();
+
+            let selftext = json[0].data.children[0].data.selftext;
+            let removed_by_category = json[0].data.children[0].data.removed_by_category;
+            return selftext == "[deleted]" || selftext == "[removed]" || removed_by_category == "moderator" ? true : false;
+        }
+
+        function previousPost(e) {
+            if(current == null || current == 0) {
+                return;
+            }
+            current = 0 < current ? current-1 : 0;
+            updatePostPage(current);
+        }
+
+        function nextPost(e) {
+            if(current == null || current == posts.length-1) {
+                return;
+            }
+            current = current < posts.length-1 ? current+1 : posts.length - 1;
+            updatePostPage(current);
+        }
+
+        function updatePostPage(index) {
+            let element = document.getElementById("reddit-embed");
+            element.setAttribute("src", posts[index]);
+        }
+
+        function generateRandomString(length) {
+            let text = '';
+            let possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+            for (let i = 0; i < length; i++) {
+                text += possible.charAt(Math.floor(Math.random() * possible.length));
+            }
+            return text;
+        };
+
+        function handleError(response) {
+            showSpinner(false);
+            if(response == null) {
+                throw new Error("No response object.");
+            }
+            // -- All non-2xx codes
+            if(!response.ok) {
+                showSnackbar(`Subreddit not found.`);
+                throw new Error(`Response available, not ok: ${response}`)
+            }
+            
+            return response;
+        }
+
+        function showSpinner(bool) {
+            if(bool == null) return;
+
+            let spinner = document.getElementById("spinner");
+            let iframe = document.getElementById("reddit-embed");
+
+            spinner.style.display = bool ? "block" : "none";
+        }
+
+        document.body.addEventListener("keyup", e => {
+            let inputSubreddit = document.getElementById("inputSubreddit");
+            switch(e.key) {
+                case "Enter":
+                    document.getElementById("buttonRandom").click();
+                    break;
+                case "ArrowLeft":
+                    if(document.activeElement.id === "inputSubreddit") return;
+                    document.getElementById("buttonPrevious").click();
+                    break;
+                case "ArrowRight":
+                    if(document.activeElement.id === "inputSubreddit") return;
+                    document.getElementById("buttonNext").click();
+                    break;
+            }
+        })
+
+        randomPost("cats");       
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/muicss/0.10.3/js/mui.min.js" integrity="sha512-X2R4Ev8iL/Xz4/J4ztf+COKz0QixPKxsqqgALlfqJTmkkxIz/9SJUMqZoGdPbakE+Azv1alk5hGYGEAWalfpCA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+</body>
+</html>
